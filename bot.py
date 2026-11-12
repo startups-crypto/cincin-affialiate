@@ -36,7 +36,7 @@ def staff(uid):
     return bool(u and u['role'] in ('owner', 'manager') and not u['blocked'])
 
 def menu(uid):
-    rows = [['📹 Добавить ролик', '📊 Мои ролики'], ['📺 Мои каналы', '➕ Подключить канал'], ['💰 Баланс', '💳 CPA и оборот'], ['🔗 Партнёрская ссылка'], ['👛 Кошелёк', '📜 Выплаты'], ['🎨 Материалы', '📋 Правила'], ['✉️ Менеджер']]
+    rows = [['📹 Добавить ролик', '📊 Мои ролики'], ['📺 Мои каналы', '➕ Подключить канал'], ['💰 Баланс', '💳 CPA и оборот'], ['🔗 Партнёрская ссылка'], ['👛 Кошелёк', '📜 Выплаты'], ['🎨 Материалы', '📋 Условия пользования'], ['✉️ Менеджер']]
     if staff(uid):
         rows.append(['🛠 Панель менеджера'])
     return ReplyKeyboardMarkup(rows, resize_keyboard=True)
@@ -50,6 +50,14 @@ async def start(update, context):
         await update.message.reply_text(WELCOME + '\n\nПеред началом ознакомьтесь с условиями участия.\n\n' + RULES, reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton('✅ Принимаю условия', callback_data='accept')]]))
     else:
         await update.message.reply_text(WELCOME + '\n\nВыберите действие в меню.', reply_markup=menu(u['id']))
+
+async def show_rules(update, context):
+    context.user_data.pop('state',None)
+    u=store.user(update.effective_user.id,update.effective_user.full_name,update.effective_user.username or '')
+    if u['accepted']:
+        await update.effective_message.reply_text(RULES)
+    else:
+        await update.effective_message.reply_text(RULES,reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton('✅ Принимаю условия',callback_data='accept')]]))
 
 async def identify(update, context):
     await update.message.reply_text(f'Ваш Telegram ID: {update.effective_user.id}')
@@ -94,10 +102,10 @@ async def callback(update, context):
         if not u['accepted'] or u['blocked']: raise ValueError('Сначала примите условия участия.')
         await show_link(update,context,None if q.data=='partner:choose' else q.data.split(':',1)[1])
     elif q.data == 'accept':
-        if not u['accepted']:
-            store.run('UPDATE users SET accepted=1,joined=? WHERE id=?', (iso(), uid))
-            store.audit(uid, 'accept_rules', 'v1')
-        await q.message.reply_text('Условия приняты. Начните с подключения канала.', reply_markup=menu(uid))
+        first=store.accept_terms(uid)
+        if first:
+            await q.edit_message_reply_markup(reply_markup=None)
+        await q.message.reply_text('✅ Условия приняты. Начните с подключения канала.' if first else '✅ Вы уже приняли условия. Выберите действие в меню.',reply_markup=menu(uid))
     elif q.data.startswith('income:') and u['accepted']:
         source = q.data.split(':', 1)[1]
         if source not in ('views','cpa','turnover'): return
@@ -168,6 +176,9 @@ async def text(update, context):
     uid = update.effective_user.id
     u = store.user(uid, update.effective_user.full_name, update.effective_user.username or '')
     message = update.message.text.strip()
+    if message in ('📋 Условия пользования','📋 Правила'):
+        await show_rules(update,context)
+        return
     if u['blocked']:
         await update.message.reply_text('Участие заблокировано. Для уточнения обратитесь к менеджеру через /support.')
         return
@@ -177,7 +188,7 @@ async def text(update, context):
     if not u['accepted']:
         await start(update, context); return
     state = context.user_data.get('state')
-    buttons = {'📹 Добавить ролик','📊 Мои ролики','📺 Мои каналы','➕ Подключить канал','💰 Баланс','💳 CPA','💳 CPA и оборот','🔗 Партнёрская ссылка','👛 Кошелёк','📜 Выплаты','🎨 Материалы','📋 Правила','✉️ Менеджер','🛠 Панель менеджера'}
+    buttons = {'📹 Добавить ролик','📊 Мои ролики','📺 Мои каналы','➕ Подключить канал','💰 Баланс','💳 CPA','💳 CPA и оборот','🔗 Партнёрская ссылка','👛 Кошелёк','📜 Выплаты','🎨 Материалы','📋 Правила','📋 Условия пользования','✉️ Менеджер','🛠 Панель менеджера'}
     if message in buttons:
         context.user_data.pop('state', None)
         state = None
@@ -255,7 +266,6 @@ async def text(update, context):
         await update.message.reply_text('\n\n'.join(f'№{p["id"]}: {money(p["amount"])} · {p["status"]}\n{p["tx"] or "Ожидает перевода"}' for p in rows) or 'Выплат пока нет.')
     elif message == '🎨 Материалы':
         await send_materials(update,context,'all')
-    elif message == '📋 Правила': await update.message.reply_text(RULES)
     elif message == '✉️ Менеджер': await support(update, context)
     elif message == '🛠 Панель менеджера': await admin(update, context)
     else: await update.message.reply_text('Выберите действие в меню.', reply_markup=menu(uid))
@@ -513,7 +523,7 @@ def store_snapshot():
 
 class ThreadStore:
     def rows(self, sql, args=()):
-        with sqlite3.connect(ROOT / 'data/bot.sqlite3') as db:
+        with sqlite3.connect(settings.database_path) as db:
             db.row_factory = sqlite3.Row
             return db.execute(sql, args).fetchall()
     def balance(self, uid):
@@ -529,19 +539,20 @@ async def errors(update, context):
         await update.effective_message.reply_text(text)
 
 async def initialized(app):
-    await app.bot.set_my_commands([('start','Главное меню'),('id','Мой Telegram ID'),('support','Написать менеджеру'),('cancel','Отменить действие'),('admin','Панель менеджера')])
+    await app.bot.set_my_commands([('start','Главное меню'),('id','Мой Telegram ID'),('support','Написать менеджеру'),('terms','Условия пользования'),('cancel','Отменить действие'),('admin','Панель менеджера')])
     app.job_queue.run_repeating(refresh, interval=settings.views_interval, first=15, job_kwargs={'max_instances': 1})
     app.job_queue.run_repeating(sync_partner, interval=settings.partner_interval, first=3, job_kwargs={'max_instances': 1})
     log.info('Local bot started; views interval %s seconds', settings.views_interval)
+    log.info('User database directory: %s', settings.data_dir)
 
 def main():
     # Single process lock prevents competing Telegram polling and payouts.
     import fcntl
-    lock = (ROOT / 'data/process.lock').open('w')
+    lock = (settings.data_dir / 'process.lock').open('w')
     try: fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
     except BlockingIOError: raise SystemExit('Бот уже запущен.')
     app = Application.builder().token(settings.telegram_token).post_init(initialized).build()
-    for cmd, fn in [('start',start),('id',identify),('admin',admin),('authors',authors),('review',review),('cancel',cancel),('support',support)]:
+    for cmd, fn in [('start',start),('id',identify),('terms',show_rules),('admin',admin),('authors',authors),('review',review),('cancel',cancel),('support',support)]:
         app.add_handler(CommandHandler(cmd, fn))
     for cmd in ['manager','unmanager','block','unblock','reply','prepare','paid','payouts','cancelpay','sync','bindaffiliate']:
         app.add_handler(CommandHandler(cmd, staff_command))

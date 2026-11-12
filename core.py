@@ -64,8 +64,8 @@ def contains_partner_link(description, expected):
 
 class Store:
     def __init__(self, path=None):
-        (ROOT / 'data').mkdir(exist_ok=True)
-        self.db = sqlite3.connect(path or ROOT / 'data/bot.sqlite3')
+        settings.data_dir.mkdir(parents=True,exist_ok=True)
+        self.db = sqlite3.connect(path or settings.database_path)
         self.db.row_factory = sqlite3.Row
         self.db.executescript('''
         PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON;
@@ -89,6 +89,9 @@ class Store:
         ''')
         if 'username' not in {r['name'] for r in self.db.execute('PRAGMA table_info(users)')}:
             self.db.execute("ALTER TABLE users ADD COLUMN username TEXT DEFAULT ''")
+        if 'accepted_at' not in {r['name'] for r in self.db.execute('PRAGMA table_info(users)')}:
+            self.db.execute('ALTER TABLE users ADD COLUMN accepted_at TEXT')
+        self.db.execute('UPDATE users SET accepted_at=joined WHERE accepted=1 AND accepted_at IS NULL')
         for owner in self.db.execute("SELECT id FROM users WHERE role='owner'").fetchall():
             if owner['id'] not in settings.owner_ids:
                 self.db.execute("UPDATE users SET role='author' WHERE id=?",(owner['id'],))
@@ -123,6 +126,17 @@ class Store:
         earned = self.one('SELECT COALESCE(SUM(amount),0) n FROM ledger WHERE user_id=?', (uid,))['n']
         paid = self.one("SELECT COALESCE(SUM(amount),0) n FROM payouts WHERE user_id=? AND status='paid'", (uid,))['n']
         return earned - paid
+
+    def accept_terms(self, uid, at=None):
+        at=iso(at)
+        with self.db:
+            self.db.execute('BEGIN IMMEDIATE')
+            user=self.one('SELECT accepted FROM users WHERE id=?',(uid,))
+            if not user:raise ValueError('Сначала запустите бота.')
+            if user['accepted']:return False
+            self.db.execute('UPDATE users SET accepted=1,accepted_at=?,joined=? WHERE id=?',(at,at,uid))
+            self.db.execute('INSERT INTO audit(actor,action,detail,at) VALUES(?,?,?,?)',(uid,'accept_rules','v1',at))
+        return True
 
     def partner_links(self, uid):
         links = [dict(r) for r in self.rows('SELECT * FROM affiliate_links WHERE user_id=? ORDER BY campaign_id', (uid,))]

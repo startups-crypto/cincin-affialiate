@@ -24,6 +24,17 @@ class Settings:
     views_interval: int = 900
     partner_interval: int = 60
     config_supplied: bool = field(default=False, repr=False)
+    storage_directory: str = ''
+
+    @property
+    def data_dir(self):
+        raw=os.environ.get('RAILWAY_VOLUME_MOUNT_PATH') or self.storage_directory
+        path=Path(raw).expanduser() if raw else ROOT/'data'
+        return path if path.is_absolute() else ROOT/path
+
+    @property
+    def database_path(self):
+        return self.data_dir/'bot.sqlite3'
 
     @property
     def active_campaign_ids(self):
@@ -70,7 +81,7 @@ def load_settings(path=CONFIG_PATH):
                         tracknow_campaign_title=partner.get('campaign_title','cincin_banner_test'),
                         tracknow_base_url=partner.get('base_url','https://apiv2.tracknow.io/api/v2').rstrip('/'),
                         views_interval=int(polling.get('youtube_seconds',900)),partner_interval=int(polling.get('tracknow_seconds',60)),
-                        config_supplied=True)
+                        config_supplied=True,storage_directory=data.get('storage',{}).get('directory',''))
     except (tomllib.TOMLDecodeError,ValueError,TypeError,AttributeError):
         raise ValueError('Неверный формат CONFIG_TOML или config.toml. Сверьте содержимое с config.example.toml.') from None
 
