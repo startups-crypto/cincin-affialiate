@@ -36,7 +36,7 @@ def staff(uid):
     return bool(u and u['role'] in ('owner', 'manager') and not u['blocked'])
 
 def menu(uid):
-    rows = [['📹 Добавить ролик', '📊 Мои ролики'], ['📺 Мои каналы', '➕ Подключить канал'], ['💰 Баланс', '💳 CPA и оборот'], ['🔗 Партнёрская ссылка'], ['👛 Кошелёк', '📜 Выплаты'], ['🎨 Материалы', '📋 Условия пользования'], ['✉️ Менеджер']]
+    rows = [['📹 Добавить ролик', '📊 Мои ролики'], ['📺 Мои каналы', '➕ Подключить канал'], ['💰 Баланс', '💳 CPA и оборот'], ['🔗 Партнёрская ссылка'], ['👛 Кошелёк', '📜 Выплаты'], ['🎨 Материалы', '📋 Условия пользования'], ['💬 Поддержка']]
     if staff(uid):
         rows.append(['🛠 Панель менеджера'])
     return ReplyKeyboardMarkup(rows, resize_keyboard=True)
@@ -176,6 +176,9 @@ async def text(update, context):
     uid = update.effective_user.id
     u = store.user(uid, update.effective_user.full_name, update.effective_user.username or '')
     message = update.message.text.strip()
+    if message in ('💬 Поддержка','✉️ Менеджер'):
+        await support(update,context)
+        return
     if message in ('📋 Условия пользования','📋 Правила'):
         await show_rules(update,context)
         return
@@ -188,7 +191,7 @@ async def text(update, context):
     if not u['accepted']:
         await start(update, context); return
     state = context.user_data.get('state')
-    buttons = {'📹 Добавить ролик','📊 Мои ролики','📺 Мои каналы','➕ Подключить канал','💰 Баланс','💳 CPA','💳 CPA и оборот','🔗 Партнёрская ссылка','👛 Кошелёк','📜 Выплаты','🎨 Материалы','📋 Правила','📋 Условия пользования','✉️ Менеджер','🛠 Панель менеджера'}
+    buttons = {'📹 Добавить ролик','📊 Мои ролики','📺 Мои каналы','➕ Подключить канал','💰 Баланс','💳 CPA','💳 CPA и оборот','🔗 Партнёрская ссылка','👛 Кошелёк','📜 Выплаты','🎨 Материалы','📋 Правила','📋 Условия пользования','✉️ Менеджер','💬 Поддержка','🛠 Панель менеджера'}
     if message in buttons:
         context.user_data.pop('state', None)
         state = None
@@ -217,11 +220,6 @@ async def text(update, context):
             direction = state[1] if len(state)>1 else 'exchange'
             await show_link(update,context,direction,email=message)
             return
-        elif kind == 'support':
-            store.run('INSERT INTO messages(user_id,text,at) VALUES(?,?,?)', (uid, message, iso()))
-            for manager in store.rows("SELECT id FROM users WHERE role IN ('owner','manager') AND blocked=0"):
-                await context.bot.send_message(manager['id'], f'Сообщение от {u["name"]} ({uid}):\n{message}', reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton('💬 Ответить автору', callback_data=f'mgr:reply:{uid}')]]))
-            await update.message.reply_text('Сообщение передано менеджерам.')
         elif kind == 'reject' and staff(uid):
             vid = state[1]
             if len(message) < 5: raise ValueError('Опишите причину отказа подробнее.')
@@ -266,7 +264,6 @@ async def text(update, context):
         await update.message.reply_text('\n\n'.join(f'№{p["id"]}: {money(p["amount"])} · {p["status"]}\n{p["tx"] or "Ожидает перевода"}' for p in rows) or 'Выплат пока нет.')
     elif message == '🎨 Материалы':
         await send_materials(update,context,'all')
-    elif message == '✉️ Менеджер': await support(update, context)
     elif message == '🛠 Панель менеджера': await admin(update, context)
     else: await update.message.reply_text('Выберите действие в меню.', reply_markup=menu(uid))
 
@@ -344,8 +341,8 @@ async def send_materials(update, context, direction):
         await update.effective_message.reply_text('Не удалось отправить видео. Ваша партнёрская ссылка сохранена. Нажмите кнопку, чтобы повторить загрузку материалов.',reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton('🔄 Получить материалы',callback_data='materials:'+direction)]]))
 
 async def support(update, context):
-    context.user_data['state'] = ('support',)
-    await update.message.reply_text('Напишите сообщение менеджеру. Ответ придёт сюда. /cancel — отмена.')
+    context.user_data.pop('state',None)
+    await update.effective_message.reply_text('💬 Свяжитесь с менеджером: @'+settings.support_username,reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton('💬 Связаться с менеджером',url=settings.support_url)]]))
 
 async def staff_command(update, context):
     actor = update.effective_user.id
@@ -543,7 +540,7 @@ async def errors(update, context):
         await update.effective_message.reply_text(text)
 
 async def initialized(app):
-    await app.bot.set_my_commands([('start','Главное меню'),('id','Мой Telegram ID'),('support','Написать менеджеру'),('terms','Условия пользования'),('cancel','Отменить действие'),('admin','Панель менеджера')])
+    await app.bot.set_my_commands([('start','Главное меню'),('id','Мой Telegram ID'),('support','Связаться с поддержкой'),('terms','Условия пользования'),('cancel','Отменить действие'),('admin','Панель менеджера')])
     app.job_queue.run_repeating(refresh, interval=settings.views_interval, first=15, job_kwargs={'max_instances': 1})
     app.job_queue.run_repeating(sync_partner, interval=settings.partner_interval, first=3, job_kwargs={'max_instances': 1})
     log.info('Local bot started; views interval %s seconds', settings.views_interval)
