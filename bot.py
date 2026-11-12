@@ -10,6 +10,7 @@ from services import YouTube, Sheets, RemoteError, Tracknow
 from terms import CARD_REWARD, RULES, WELCOME
 from settings import settings
 from partner_program import PartnerProgram
+from materials import MaterialKit
 
 settings.validate()
 
@@ -19,6 +20,7 @@ sheets = Sheets()
 tracknow = Tracknow()
 campaign_id = settings.tracknow_campaign_id
 partner_program = PartnerProgram(store,tracknow,settings)
+material_kit = MaterialKit(store,ROOT,settings.telegram_token.split(':',1)[0])
 log = logging.getLogger('cincin')
 logging.basicConfig(level=logging.INFO, format='%(asctime)s %(name)s %(levelname)s %(message)s')
 logging.getLogger('httpx').setLevel(logging.WARNING)
@@ -85,6 +87,9 @@ async def callback(update, context):
             context.user_data.pop('state', None)
             await q.message.reply_text('Действие отменено.', reply_markup=menu(uid))
         await q.edit_message_reply_markup(reply_markup=None)
+    elif q.data.startswith('materials:'):
+        if not u['accepted'] or u['blocked']: raise ValueError('Сначала примите условия участия.')
+        await send_materials(update,context,q.data.split(':',1)[1])
     elif q.data.startswith('partner:'):
         if not u['accepted'] or u['blocked']: raise ValueError('Сначала примите условия участия.')
         await show_link(update,context,None if q.data=='partner:choose' else q.data.split(':',1)[1])
@@ -249,8 +254,7 @@ async def text(update, context):
         rows = store.rows('SELECT * FROM payouts WHERE user_id=? ORDER BY id DESC LIMIT 20', (uid,))
         await update.message.reply_text('\n\n'.join(f'№{p["id"]}: {money(p["amount"])} · {p["status"]}\n{p["tx"] or "Ожидает перевода"}' for p in rows) or 'Выплат пока нет.')
     elif message == '🎨 Материалы':
-        with (ROOT / 'assets/material.png').open('rb') as f:
-            await update.message.reply_document(f, caption='Материал CinCin Partners. Баннер размещается на протяжении всего ролика.\n' + CARD_REWARD + '\nДополнительно: $5 за каждые полные 100 000 просмотров каждого одобренного Shorts, учёт 60 дней.')
+        await update.message.reply_text('🎬 Выберите направление материалов:',reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton('💳 CinCin Cards — рубли РФ через СБП',callback_data='materials:cards')],[InlineKeyboardButton('💱 CinCin Exchange — криптовалюта',callback_data='materials:exchange')]]))
     elif message == '📋 Правила': await update.message.reply_text(RULES)
     elif message == '✉️ Менеджер': await support(update, context)
     elif message == '🛠 Панель менеджера': await admin(update, context)
@@ -313,7 +317,22 @@ async def show_link(update, context, direction=None, email=None):
         return
     selected,link=await partner_program.issue(uid,direction,email)
     context.user_data.pop('state',None)
-    await update.effective_message.reply_text('🔗 '+selected['title']+'\n'+selected['description']+'\n\nВаша партнёрская ссылка:\n'+link+'\n\n'+CARD_REWARD,reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton('🔀 Другое направление',callback_data='partner:choose')]]),disable_web_page_preview=True)
+    await update.effective_message.reply_text('🔗 '+selected['title']+'\n'+selected['description']+'\n\nВаша партнёрская ссылка:\n'+link+'\n\n'+CARD_REWARD,reply_markup=InlineKeyboardMarkup(([[InlineKeyboardButton('🎬 Материалы для СБП',callback_data='materials:cards')]] if direction=='cards' else [])+[[InlineKeyboardButton('🔀 Другое направление',callback_data='partner:choose')]]),disable_web_page_preview=True)
+    if direction=='cards':
+        await send_materials(update,context,'cards')
+
+async def send_materials(update, context, direction):
+    if direction=='cards':
+        try:
+            await material_kit.send_cards(context.bot,update.effective_user.id)
+        except Exception as error:
+            log.warning('Material delivery failed: %s',type(error).__name__)
+            await update.effective_message.reply_text('Не удалось отправить видео. Ваша партнёрская ссылка сохранена. Нажмите кнопку, чтобы повторить загрузку материалов.',reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton('🔄 Получить материалы',callback_data='materials:cards')]]))
+    elif direction=='exchange':
+        with (ROOT/'assets/material.png').open('rb') as file:
+            await update.effective_message.reply_document(file,caption='Логотип CinCin Partners. Видеоматериалы для пополнения криптовалютой будут добавлены отдельно.')
+    else:
+        raise ValueError('Неизвестное направление материалов.')
 
 async def support(update, context):
     context.user_data['state'] = ('support',)
