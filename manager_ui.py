@@ -5,7 +5,7 @@ from html import escape
 import re
 from telegram import InlineKeyboardButton as Button, InlineKeyboardMarkup as Inline, ReplyKeyboardMarkup
 from telegram.error import BadRequest
-from core import now, iso, MSK, cutoff
+from core import now, iso, MSK, cutoff, has_partner_link
 from settings import settings
 
 PAGE_SIZE = 8
@@ -94,15 +94,19 @@ class ManagerPanel:
         if claim:
             manager=self.s.user(claim['manager_id'])
             lines.append('Проверяет: '+escape(manager['name'] or str(manager['id'])))
-        try:
-            author_url=await asyncio.to_thread(self.r.sheets.author_url,uid,self.r.store_snapshot())
-            table_button=Button('📊 Таблица автора',url=author_url)
-        except Exception:
-            table_button=Button('📊 Таблица автора',callback_data=f'mgr:table:{uid}')
+        table_button=None
+        if has_partner_link(self.s,uid):
+            try:
+                author_url=await asyncio.to_thread(self.r.sheets.author_url,uid,self.r.store_snapshot())
+                table_button=Button('📊 Таблица автора',url=author_url)
+            except Exception:
+                table_button=Button('📊 Таблица автора',callback_data=f'mgr:table:{uid}')
+        else:
+            lines.append('Вкладка в таблице появится после получения партнёрской ссылки.')
         rows=[[Button('🔎 Проверить ролики',callback_data=f'mgr:review:{uid}:0')],
               [Button('💬 Написать автору',callback_data=f'mgr:reply:{uid}')],
-              [Button('📜 История выплат автора',callback_data=f'mgr:history:{uid}:0')],
-              [table_button]]
+              [Button('📜 История выплат автора',callback_data=f'mgr:history:{uid}:0')]]
+        if table_button:rows.append([table_button])
         if info['prepared']:rows.insert(0,[Button('💸 Выплата готова к переводу',callback_data=f'mgr:payout:{info["prepared"]["id"]}')])
         elif not u['blocked']:rows.append([Button('💸 Подготовить выплату',callback_data=f'mgr:prepare:{uid}')])
         if claim and claim['manager_id']==update.effective_user.id:rows.append([Button('🔓 Освободить проверку',callback_data=f'mgr:release:{uid}')])

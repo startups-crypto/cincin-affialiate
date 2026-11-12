@@ -62,6 +62,17 @@ def contains_partner_link(description, expected):
         return False
     return False
 
+LINKED_AUTHOR_CONDITION = """(
+    trim(COALESCE(u.tracking_link,''))!=''
+    OR EXISTS(SELECT 1 FROM affiliate_links a WHERE a.user_id=u.id AND trim(COALESCE(a.link,''))!='')
+)"""
+
+def linked_authors(store):
+    return store.rows('SELECT u.* FROM users u WHERE '+LINKED_AUTHOR_CONDITION)
+
+def has_partner_link(store, uid):
+    return bool(store.rows('SELECT 1 FROM users u WHERE u.id=? AND '+LINKED_AUTHOR_CONDITION,(uid,)))
+
 class Store:
     def __init__(self, path=None):
         settings.data_dir.mkdir(parents=True,exist_ok=True)

@@ -328,6 +328,10 @@ async def show_link(update, context, direction=None, email=None):
     selected,link=await partner_program.issue(uid,direction,email)
     context.user_data.pop('state',None)
     await update.effective_message.reply_text('🔗 '+selected['title']+'\n'+selected['description']+'\n\nВаша партнёрская ссылка:\n'+link+'\n\n'+CARD_REWARD,reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton('🎬 Материалы для СБП' if direction=='cards' else '🎬 Материалы для криптовалюты',callback_data='materials:'+direction)]]+[[InlineKeyboardButton('🔀 Другое направление',callback_data='partner:choose')]]),disable_web_page_preview=True)
+    try:
+        await asyncio.to_thread(sheets.sync,store_snapshot())
+    except Exception as error:
+        log.warning('Author sheet synchronization delayed: %s',type(error).__name__)
     await send_materials(update,context,direction)
 
 async def send_materials(update, context, direction):

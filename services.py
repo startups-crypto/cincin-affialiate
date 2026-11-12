@@ -1,8 +1,9 @@
 import json
 import requests
+import threading
 from google.oauth2 import service_account
 from google.auth.transport.requests import AuthorizedSession
-from core import ROOT, iso, now, video_id, income_breakdown
+from core import ROOT, iso, now, video_id, income_breakdown, linked_authors, has_partner_link
 from terms import CARD_REWARD, CAMPAIGN_TITLE, RULES
 from settings import settings
 
@@ -44,8 +45,15 @@ class Sheets:
         creds = service_account.Credentials.from_service_account_info(settings.google_service_account, scopes=['https://www.googleapis.com/auth/spreadsheets'])
         self.session = AuthorizedSession(creds)
         self.url = 'https://sheets.googleapis.com/v4/spreadsheets/' + settings.google_spreadsheet_id
+        self.lock=threading.RLock()
 
     def author_url(self, uid, store):
+        if not has_partner_link(store,uid):
+            raise RemoteError('Вкладка автора появится после получения партнёрской ссылки.')
+        with self.lock:
+            return self._author_url(uid,store)
+
+    def _author_url(self, uid, store):
         title = f'Автор {uid}'
         def lookup():
             metadata = checked(self.session.get(self.url, params={'fields':'sheets.properties(sheetId,title)'}, timeout=30))
@@ -59,9 +67,13 @@ class Sheets:
         return f'https://docs.google.com/spreadsheets/d/{settings.google_spreadsheet_id}/edit?gid={gid}#gid={gid}'
 
     def sync(self, store):
+        with self.lock:
+            return self._sync(store)
+
+    def _sync(self, store):
         metadata = checked(self.session.get(self.url, timeout=30))
         titles = {s['properties']['title'] for s in metadata['sheets']}
-        users = store.rows("SELECT * FROM users WHERE accepted=1 OR role!='author'")
+        users = linked_authors(store)
         names = ['Обзор', 'Выплаты', 'Условия'] + ['Автор ' + str(u['id']) for u in users]
         missing = [name for name in names if name not in titles]
         if missing:
@@ -99,6 +111,7 @@ class Sheets:
             ['Начисления', 'Подтверждённые комиссии автоматически добавляются в баланс.'],
             ['Полные условия', RULES],
         ]})
+        checked(self.session.post(self.url + '/values:batchClear',json={'ranges':["'Обзор'!A2:M"]},timeout=30))
         checked(self.session.post(self.url + '/values:batchUpdate', json={'valueInputOption': 'RAW', 'data': values}, timeout=30))
 
 class Tracknow:
