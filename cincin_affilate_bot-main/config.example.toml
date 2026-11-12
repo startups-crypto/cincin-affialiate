@@ -3,10 +3,10 @@
 
 [telegram]
 # Токен вашего Telegram-бота от @BotFather.
-token = ""
+token = "" # Токен нового бота сохранён в GitHub Secrets: TELEGRAM_BOT_TOKEN.
 # Числовой Telegram ID владельца. Несколько владельцев: [123456789, 987654321].
 # Свой ID можно узнать командой /id в боте. Менеджеров назначает владелец через панель.
-owner_ids = []
+owner_ids = [7241115648]
 
 [youtube]
 # Ключ Google Cloud проекта с включённым YouTube Data API v3.
