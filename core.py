@@ -70,6 +70,8 @@ class Store:
         self.db.executescript('''
         PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON;
         CREATE TABLE IF NOT EXISTS users(id INTEGER PRIMARY KEY,name TEXT,joined TEXT,accepted INTEGER DEFAULT 0,role TEXT DEFAULT 'author',blocked INTEGER DEFAULT 0,wallet TEXT DEFAULT '',code TEXT,affiliate_id INTEGER,tracking_link TEXT);
+        CREATE TABLE IF NOT EXISTS affiliate_links(user_id INTEGER,campaign_id INTEGER,link TEXT,PRIMARY KEY(user_id,campaign_id));
+        CREATE TABLE IF NOT EXISTS video_campaigns(video_id TEXT PRIMARY KEY,campaign_id INTEGER);
         CREATE TABLE IF NOT EXISTS channels(id TEXT PRIMARY KEY,user_id INTEGER REFERENCES users(id),title TEXT);
         CREATE TABLE IF NOT EXISTS videos(id TEXT PRIMARY KEY,user_id INTEGER REFERENCES users(id),title TEXT,published TEXT,deadline TEXT,views INTEGER DEFAULT 0,checked TEXT,status TEXT DEFAULT 'pending',reason TEXT DEFAULT '',earned INTEGER DEFAULT 0,final INTEGER DEFAULT 0);
         CREATE TABLE IF NOT EXISTS ledger(id INTEGER PRIMARY KEY,user_id INTEGER,source TEXT,external_id TEXT,amount INTEGER,created TEXT,UNIQUE(source,external_id));
@@ -121,6 +123,24 @@ class Store:
         earned = self.one('SELECT COALESCE(SUM(amount),0) n FROM ledger WHERE user_id=?', (uid,))['n']
         paid = self.one("SELECT COALESCE(SUM(amount),0) n FROM payouts WHERE user_id=? AND status='paid'", (uid,))['n']
         return earned - paid
+
+    def partner_links(self, uid):
+        links = [dict(r) for r in self.rows('SELECT * FROM affiliate_links WHERE user_id=? ORDER BY campaign_id', (uid,))]
+        profile = self.one('SELECT tracking_link FROM users WHERE id=?', (uid,))
+        if profile and profile['tracking_link'] and not any(r['link']==profile['tracking_link'] for r in links):
+            links.append({'user_id':uid,'campaign_id':settings.tracknow_campaign_id,'link':profile['tracking_link']})
+        return links
+
+    def save_partner_link(self, uid, campaign_id, link):
+        with self.db:
+            previous=self.one('SELECT tracking_link FROM users WHERE id=?',(uid,))
+            if previous and previous['tracking_link'] and not self.one('SELECT 1 FROM affiliate_links WHERE user_id=? AND link=?',(uid,previous['tracking_link'])):
+                parsed=parse_qs(urlparse(previous['tracking_link']).query).get('campaign_id',[])
+                legacy_cid=int(parsed[0]) if parsed and parsed[0].isdigit() else settings.tracknow_campaign_id
+                if legacy_cid!=campaign_id:
+                    self.db.execute('INSERT OR IGNORE INTO affiliate_links VALUES(?,?,?)',(uid,legacy_cid,previous['tracking_link']))
+            self.db.execute('INSERT INTO affiliate_links VALUES(?,?,?) ON CONFLICT(user_id,campaign_id) DO UPDATE SET link=excluded.link', (uid,campaign_id,link))
+            self.db.execute('UPDATE users SET tracking_link=? WHERE id=?', (link,uid))
 
     def income(self, uid):
         return income_breakdown(self, uid)
@@ -189,6 +209,8 @@ class Store:
             if not uid:
                 continue
             source = rules.get(event.get('campaignPayoutId'))
+            if source == 'ignore' and Decimal(str(event.get('affiliateCommission', 0))) == 0:
+                continue
             if source not in ('cpa', 'turnover'):
                 raise ValueError('Неизвестное правило вознаграждения Tracknow. Импорт остановлен.')
             external = event.get('ogId')

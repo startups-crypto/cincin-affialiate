@@ -9,6 +9,7 @@ from core import Store, ROOT, now, iso, video_id, MSK, contains_partner_link
 from services import YouTube, Sheets, RemoteError, Tracknow
 from terms import CARD_REWARD, RULES, WELCOME
 from settings import settings
+from partner_program import PartnerProgram
 
 settings.validate()
 
@@ -17,6 +18,7 @@ youtube = YouTube()
 sheets = Sheets()
 tracknow = Tracknow()
 campaign_id = settings.tracknow_campaign_id
+partner_program = PartnerProgram(store,tracknow,settings)
 log = logging.getLogger('cincin')
 logging.basicConfig(level=logging.INFO, format='%(asctime)s %(name)s %(levelname)s %(message)s')
 logging.getLogger('httpx').setLevel(logging.WARNING)
@@ -79,10 +81,13 @@ async def callback(update, context):
         await manager_panel.handle_callback(update, context)
         return
     if q.data == 'cancel:affiliate_email':
-        if context.user_data.get('state') == ('affiliate_email',):
+        if (context.user_data.get('state') or ('',))[0] == 'affiliate_email':
             context.user_data.pop('state', None)
             await q.message.reply_text('Действие отменено.', reply_markup=menu(uid))
         await q.edit_message_reply_markup(reply_markup=None)
+    elif q.data.startswith('partner:'):
+        if not u['accepted'] or u['blocked']: raise ValueError('Сначала примите условия участия.')
+        await show_link(update,context,None if q.data=='partner:choose' else q.data.split(':',1)[1])
     elif q.data == 'accept':
         if not u['accepted']:
             store.run('UPDATE users SET accepted=1,joined=? WHERE id=?', (iso(), uid))
@@ -132,9 +137,11 @@ async def add_video(uid, text):
         raise ValueError('Сначала подтвердите канал, на котором опубликован ролик.')
     published = datetime.fromisoformat(v['snippet']['publishedAt'].replace('Z', '+00:00'))
     u = store.one('SELECT * FROM users WHERE id=?', (uid,))
-    if not u['tracking_link']:
+    links = store.partner_links(uid)
+    if not links:
         raise ValueError('Сначала получите свою ссылку кнопкой «Партнёрская ссылка» и добавьте её в описание видео.')
-    if not contains_partner_link(v['snippet'].get('description', ''), u['tracking_link']):
+    matched = next((link for link in links if contains_partner_link(v['snippet'].get('description', ''),link['link'])),None)
+    if not matched:
         raise ValueError('В описании видео не найдена ваша партнёрская ссылка. Добавьте ссылку и отправьте ролик повторно в течение 24 часов после публикации.')
     if published < datetime.fromisoformat(u['joined']):
         raise ValueError('Принимаются только ролики после принятия условий.')
@@ -147,7 +154,8 @@ async def add_video(uid, text):
         raise ValueError('Принимаются только Shorts длительностью до 3 минут.')
     # The public API does not expose a reliable isShort flag or banner presence: manager checks these.
     store.run('INSERT INTO videos(id,user_id,title,published,deadline) VALUES(?,?,?,?,?)', (vid, uid, v['snippet']['title'], iso(published), iso(published + timedelta(days=60))))
-    store.record_link_check(vid, u['tracking_link'], True)
+    store.record_link_check(vid, matched['link'], True)
+    store.run('INSERT INTO video_campaigns VALUES(?,?)',(vid,matched['campaign_id']))
     store.update_views(vid, int(v['statistics'].get('viewCount', 0)))
     return '✅ Ролик добавлен. Партнёрская ссылка найдена в описании. Просмотры и наличие ссылки отслеживаются автоматически; формат Shorts и баннер проверит менеджер перед выплатой.'
 
@@ -188,17 +196,10 @@ async def text(update, context):
             store.audit(uid, 'wallet_changed', message)
             await update.message.reply_text('Кошелёк сохранён: ' + message)
         elif kind == 'affiliate_email':
-            if not re.fullmatch(r'[^\s@]+@[^\s@]+\.[^\s@]+', message) or len(message)>254:
+            if not re.fullmatch(r'[^\s@]+@[^\s@]+\.[^\s@]+',message) or len(message)>254:
                 raise ValueError('Отправьте корректный email для создания партнёрского аккаунта.')
-            # A fresh account is required. Never claim an existing account by an unverified email.
-            response = await asyncio.to_thread(tracknow.register, uid, u['name'], message)
-            affiliate = response.get('data', {}).get('id')
-            if not isinstance(affiliate, int):
-                raise ValueError('Не удалось получить ID нового партнёра. Обратитесь к менеджеру.')
-            store.run('UPDATE users SET affiliate_id=? WHERE id=? AND affiliate_id IS NULL', (affiliate, uid))
-            store.audit(uid, 'affiliate_created', affiliate)
-            context.user_data.pop('state', None)
-            await show_link(update, context)
+            direction = state[1] if len(state)>1 else 'exchange'
+            await show_link(update,context,direction,email=message)
             return
         elif kind == 'support':
             store.run('INSERT INTO messages(user_id,text,at) VALUES(?,?,?)', (uid, message, iso()))
@@ -294,21 +295,25 @@ def source_text(uid, source):
         lines.append(partner_sync_text())
     return '\n'.join(lines)
 
-async def show_link(update, context):
-    if not settings.tracknow_enabled: raise ValueError('Партнёрская программа пока не подключена. Обратитесь к менеджеру.')
-    uid = update.effective_user.id
-    u = store.user(uid)
-    if not u['affiliate_id']:
-        context.user_data['state'] = ('affiliate_email',)
-        await update.message.reply_text('Для создания отдельного партнёрского аккаунта отправьте свой email.\n\nРекламные письма отключены.', reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton('❌ Отмена', callback_data='cancel:affiliate_email')]]))
+async def show_link(update, context, direction=None, email=None):
+    if not settings.tracknow_enabled:
+        raise ValueError('Партнёрская программа пока не подключена. Обратитесь к менеджеру.')
+    uid=update.effective_user.id
+    if direction is None:
+        context.user_data.pop('state',None)
+        choices=partner_program.directions()
+        buttons=[[InlineKeyboardButton(item['button'],callback_data='partner:'+key)] for key,item in choices.items() if item['campaign_id']>0]
+        await update.effective_message.reply_text('🔗 Куда направлять пользователей?\n\n💱 CinCin Exchange — пополнение криптовалютой.\n💳 CinCin Cards — пополнение рублями РФ через СБП.\n\nДля каждого направления выдаётся отдельная ссылка. Можно получить обе.',reply_markup=InlineKeyboardMarkup(buttons))
         return
-    await asyncio.to_thread(tracknow.assign, u['affiliate_id'], campaign_id)
-    result = await asyncio.to_thread(tracknow.link, u['affiliate_id'], campaign_id)
-    link = result.get('link', '')
-    if not link.startswith(('https://','http://')):
-        raise ValueError('Tracknow пока не выдал ссылку. Привязка автора сохранена.')
-    store.run('UPDATE users SET tracking_link=? WHERE id=?', (link, uid))
-    await update.message.reply_text('Ваша партнёрская ссылка:\n' + link + '\n\n' + CARD_REWARD + '\nТестовая кампания приостановлена: реальное оформление карты пока не подключено.')
+    selected=partner_program.direction(direction)
+    user=store.user(uid)
+    if not user['affiliate_id'] and not email:
+        context.user_data['state']=('affiliate_email',direction)
+        await update.effective_message.reply_text('Для создания отдельного партнёрского аккаунта отправьте свой email.\n\nРекламные письма отключены.',reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton('❌ Отмена',callback_data='cancel:affiliate_email')]]))
+        return
+    selected,link=await partner_program.issue(uid,direction,email)
+    context.user_data.pop('state',None)
+    await update.effective_message.reply_text('🔗 '+selected['title']+'\n'+selected['description']+'\n\nВаша партнёрская ссылка:\n'+link+'\n\n'+CARD_REWARD,reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton('🔀 Другое направление',callback_data='partner:choose')]]),disable_web_page_preview=True)
 
 async def support(update, context):
     context.user_data['state'] = ('support',)
@@ -339,7 +344,9 @@ async def staff_command(update, context):
         if not user: raise ValueError('Автор должен сначала запустить бота.')
         if user['affiliate_id'] and user['affiliate_id'] != affiliate_id:
             raise ValueError('У автора уже другая привязка. Автоматическая замена запрещена.')
-        members = await asyncio.to_thread(tracknow.get, f'{campaign_id}/affiliates')
+        members=[]
+        for cid in settings.active_campaign_ids:
+            members.extend(await asyncio.to_thread(tracknow.get,f'{cid}/affiliates'))
         if not any(str(m.get('value')) == str(affiliate_id) for m in members):
             raise ValueError('Партнёр не найден среди участников нашей тестовой кампании. Сначала проверьте и добавьте его в Tracknow.')
         owner = store.one('SELECT id FROM users WHERE affiliate_id=?', (affiliate_id,))
@@ -402,8 +409,13 @@ async def sync_partner(context, required=False):
         else: return
     async with partner_lock:
         try:
-            events, rules = await asyncio.to_thread(tracknow.fetch_income, campaign_id)
-            changes = store.apply_partner_events(events, campaign_id, rules)
+            snapshots = []
+            for cid in settings.active_campaign_ids:
+                events,rules=await asyncio.to_thread(tracknow.fetch_income,cid)
+                snapshots.append((cid,events,rules))
+            changes=[]
+            for cid,events,rules in snapshots:
+                changes.extend(store.apply_partner_events(events,cid,rules))
         except Exception as error:
             previous = store.one("SELECT * FROM sync_state WHERE name='tracknow'")
             code = type(error).__name__
@@ -415,7 +427,11 @@ async def sync_partner(context, required=False):
                     except Exception: pass
             if required: raise ValueError('Сначала необходимо успешно обновить Tracknow. Выплата не изменена.') from None
             return
-        for uid, source, delta in changes:
+        totals={}
+        for uid,source,delta in changes:
+            totals[(uid,source)]=totals.get((uid,source),0)+delta
+        for (uid,source),delta in totals.items():
+            if not delta: continue
             name = 'Оформление карт' if source == 'cpa' else 'Оборот по картам (0,1%)'
             try:
                 await context.bot.send_message(uid, f'{name}: {"начисление" if delta>0 else "корректировка"} {money(delta)}.\nОбщий баланс: {money(store.balance(uid))}\nПодробности — в разделе «Баланс».')
@@ -457,8 +473,9 @@ async def refresh(context):
 
 async def check_video_link(context, video, remote):
     previous = store.one('SELECT * FROM video_link_checks WHERE video_id=?', (video['id'],))
-    user = store.one('SELECT tracking_link FROM users WHERE id=?', (video['user_id'],))
-    expected = (previous['expected_link'] if previous else None) or user['tracking_link'] or ''
+    links = store.partner_links(video['user_id'])
+    matched = next((link['link'] for link in links if contains_partner_link(remote['snippet'].get('description',''),link['link'])), '')
+    expected = (previous['expected_link'] if previous else None) or matched or (links[0]['link'] if links else '')
     valid = contains_partner_link(remote['snippet'].get('description', ''), expected)
     changed = store.record_link_check(video['id'], expected, valid)
     if changed and (not valid or (previous and not previous['valid'])):

@@ -11,6 +11,8 @@ def main():
     api = Tracknow()
     api.require_access()
     cid = settings.tracknow_campaign_id
+    if cid <= 0 or cid in (settings.tracknow_exchange_campaign_id,settings.tracknow_cards_campaign_id):
+        raise ValueError('Эта команда предназначена только для отдельной тестовой кампании, не для Exchange/Cards.')
     (ROOT / 'secrets').mkdir(exist_ok=True)
     url = settings.tracknow_base_url
     headers = {'Authorization': 'Bearer ' + api.token}

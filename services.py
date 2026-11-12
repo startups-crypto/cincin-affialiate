@@ -106,7 +106,7 @@ class Tracknow:
         self.token = settings.tracknow_api_key
 
     def require_access(self):
-        if not settings.tracknow_enabled or not self.token or settings.tracknow_campaign_id <= 0:
+        if not settings.tracknow_enabled or not self.token or not settings.active_campaign_ids:
             raise RemoteError('Партнёрская программа пока не подключена. Обратитесь к менеджеру.')
 
     def get(self, path, **params):
@@ -152,10 +152,12 @@ class Tracknow:
         rows = data.get('content', [])
         rules = {}
         for r in rows:
-            if r.get('goalValue') == 'card_issued' and r.get('paymentType') == 'CPA' and r.get('affiliateCommission') == 10:
+            if r.get('goalValue') in ('card_issued', 'card_open') and r.get('paymentType') == 'CPA' and r.get('affiliateCommission') == 10:
                 rules[r['identity']] = 'cpa'
-            elif r.get('goalValue') == 'card_turnover' and r.get('paymentType') == 'CPS' and r.get('affiliateCommission') == 0.1:
+            elif r.get('goalValue') in ('card_turnover', 'card_top_up', 'card_withdrawal', 'chargeback', 'exchange') and r.get('paymentType') == 'CPS' and r.get('affiliateCommission') == 0.1:
                 rules[r['identity']] = 'turnover'
-        if sorted(rules.values()) != ['cpa', 'turnover']:
+            elif r.get('goalValue') == 'card_blocking' and r.get('affiliateCommission') == 0:
+                rules[r['identity']] = 'ignore'
+        if not {'cpa','turnover'}.issubset(set(rules.values())):
             raise RemoteError('Правила CPA/оборота изменились. Проверьте кампанию перед импортом.')
         return self.conversions(campaign_id), rules

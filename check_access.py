@@ -32,7 +32,8 @@ async def main():
         try:
             api = Tracknow()
             api.get('me')
-            api.get(f'campaigns/{settings.tracknow_campaign_id}')
+            for cid in settings.active_campaign_ids:
+                api.get(f'campaigns/{cid}')
             print('Tracknow: OK')
         except Exception as e:
             failures += 1

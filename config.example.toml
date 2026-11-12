@@ -37,6 +37,9 @@ enabled = false
 api_key = ""
 # ID ВАШЕЙ кампании из Tracknow; 0 означает, что кампания ещё не выбрана.
 campaign_id = 0
+# Два рабочих направления (можно оставить эти ID для текущей программы).
+exchange_campaign_id = 338
+cards_campaign_id = 339
 campaign_title = "cincin_banner_test"
 base_url = "https://apiv2.tracknow.io/api/v2"
 
