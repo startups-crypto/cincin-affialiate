@@ -254,7 +254,7 @@ async def text(update, context):
         rows = store.rows('SELECT * FROM payouts WHERE user_id=? ORDER BY id DESC LIMIT 20', (uid,))
         await update.message.reply_text('\n\n'.join(f'№{p["id"]}: {money(p["amount"])} · {p["status"]}\n{p["tx"] or "Ожидает перевода"}' for p in rows) or 'Выплат пока нет.')
     elif message == '🎨 Материалы':
-        await update.message.reply_text('🎬 Выберите направление материалов:',reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton('💳 CinCin Cards — рубли РФ через СБП',callback_data='materials:cards')],[InlineKeyboardButton('💱 CinCin Exchange — криптовалюта',callback_data='materials:exchange')]]))
+        await send_materials(update,context,'all')
     elif message == '📋 Правила': await update.message.reply_text(RULES)
     elif message == '✉️ Менеджер': await support(update, context)
     elif message == '🛠 Панель менеджера': await admin(update, context)
@@ -321,7 +321,7 @@ async def show_link(update, context, direction=None, email=None):
     await send_materials(update,context,direction)
 
 async def send_materials(update, context, direction):
-    if direction not in ('cards','exchange'):
+    if direction not in ('cards','exchange','all'):
         raise ValueError('Неизвестное направление материалов.')
     try:
         await material_kit.send(context.bot,update.effective_user.id,direction)
@@ -521,19 +521,6 @@ class ThreadStore:
         paid = self.rows("SELECT COALESCE(SUM(amount),0) n FROM payouts WHERE user_id=? AND status='paid'", (uid,))[0]['n']
         return earned-paid
 
-async def material(update, context):
-    if store.user(update.effective_user.id)['role'] != 'owner' or update.message.caption != '/material': return
-    if update.message.document:
-        if update.message.document.mime_type != 'image/png':
-            raise ValueError('Отправьте PNG-файл.')
-        file = await update.message.document.get_file()
-    elif update.message.photo:
-        file = await update.message.photo[-1].get_file()
-    else: return
-    await file.download_to_drive(ROOT / 'assets/material.png')
-    store.audit(update.effective_user.id, 'replace_material', '')
-    await update.message.reply_text('Материал обновлён.')
-
 async def errors(update, context):
     error = context.error
     log.warning('Operation failed: %s', type(error).__name__)
@@ -559,7 +546,6 @@ def main():
     for cmd in ['manager','unmanager','block','unblock','reply','prepare','paid','payouts','cancelpay','sync','bindaffiliate']:
         app.add_handler(CommandHandler(cmd, staff_command))
     app.add_handler(CallbackQueryHandler(callback))
-    app.add_handler(MessageHandler(filters.PHOTO | filters.Document.IMAGE, material))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, text))
     app.add_error_handler(errors)
     app.run_polling(drop_pending_updates=False)

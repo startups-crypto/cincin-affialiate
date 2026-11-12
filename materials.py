@@ -20,17 +20,28 @@ class MaterialKit:
     async def send_exchange(self, bot, uid):
         return await self.send(bot,uid,'exchange')
 
+    async def send_all(self, bot, uid):
+        return await self.send(bot,uid,'all')
+
     async def send(self, bot, uid, direction):
         catalog={'cards':('CinCin Cards','пополнение рублями РФ через СБП'),
                  'exchange':('CinCin Exchange','пополнение криптовалютой')}
-        if direction not in catalog:raise ValueError('Неизвестное направление материалов.')
-        brand,description=catalog[direction]
+        if direction not in (*catalog,'all'):raise ValueError('Неизвестное направление материалов.')
         async with self.lock:
-            assets=[self.root/f'assets/{direction}/banner.mp4',self.root/f'assets/{direction}/card.mp4']
-            captions=[
-                f'🎬 Материалы {brand} — {description}.\n\nИспользуйте эти материалы для своих роликов. Баннер должен присутствовать на протяжении всего видео, а ваша партнёрская ссылка — в описании.',
-                f'🎬 Дополнительный материал {brand} — {description}.',
-            ]
+            if direction=='all':
+                assets=[self.root/'assets/cards/banner.mp4',self.root/'assets/exchange/banner.mp4',self.root/'assets/cards/card.mp4']
+                captions=[
+                    '🎬 Баннер CinCin Cards — пополнение рублями РФ через СБП.\n\nВыберите баннер под своё направление. Он должен присутствовать на протяжении всего ролика, а ваша партнёрская ссылка — в описании.',
+                    '🎬 Баннер CinCin Exchange — пополнение криптовалютой.',
+                    '🎬 Материал о карте CinCin — для обоих направлений.',
+                ]
+            else:
+                brand,description=catalog[direction]
+                assets=[self.root/f'assets/{direction}/banner.mp4',self.root/f'assets/{direction}/card.mp4']
+                captions=[
+                    f'🎬 Материалы {brand} — {description}.\n\nИспользуйте эти материалы для своих роликов. Баннер должен присутствовать на протяжении всего видео, а ваша партнёрская ссылка — в описании.',
+                    f'🎬 Дополнительный материал {brand} — {description}.',
+                ]
             keys=[];cached=[]
             for path in assets:
                 if not path.is_file() or path.stat().st_size>50*1024*1024:
