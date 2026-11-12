@@ -1,6 +1,7 @@
 """All deployment credentials and integration settings come from one private file."""
 from dataclasses import dataclass, field
 from pathlib import Path
+import os
 import tomllib
 
 ROOT = Path(__file__).resolve().parent
@@ -20,14 +21,15 @@ class Settings:
     tracknow_base_url: str = 'https://apiv2.tracknow.io/api/v2'
     views_interval: int = 900
     partner_interval: int = 60
+    config_supplied: bool = field(default=False, repr=False)
 
     @property
     def spreadsheet_url(self):
         return 'https://docs.google.com/spreadsheets/d/' + self.google_spreadsheet_id
 
     def validate(self):
-        if not CONFIG_PATH.exists():
-            raise ValueError('Создайте config.toml по образцу config.example.toml и заполните настройки.')
+        if not self.config_supplied:
+            raise ValueError('Заполните CONFIG_TOML в Railway Variables или создайте файл config.toml.')
         missing=[]
         for name,value in [('telegram.token',self.telegram_token),('telegram.owner_ids',self.owner_ids),
                            ('youtube.api_key',self.youtube_api_key),('google_sheets.spreadsheet_id',self.google_spreadsheet_id)]:
@@ -43,9 +45,12 @@ class Settings:
 
 def load_settings(path=CONFIG_PATH):
     path=Path(path)
-    if not path.exists():return Settings()
+    source=os.environ.get('CONFIG_TOML') if path==CONFIG_PATH else None
+    if source is None:
+        if not path.exists():return Settings()
+        source=path.read_text()
     try:
-        data=tomllib.loads(path.read_text())
+        data=tomllib.loads(source.lstrip('\ufeff'))
         telegram=data.get('telegram',{});youtube=data.get('youtube',{})
         google=data.get('google_sheets',{});partner=data.get('tracknow',{});polling=data.get('polling',{})
         account={'type':'service_account','token_uri':'https://oauth2.googleapis.com/token','universe_domain':'googleapis.com',**google.get('service_account',{})}
@@ -56,8 +61,9 @@ def load_settings(path=CONFIG_PATH):
                         tracknow_campaign_id=int(partner.get('campaign_id',0)),
                         tracknow_campaign_title=partner.get('campaign_title','cincin_banner_test'),
                         tracknow_base_url=partner.get('base_url','https://apiv2.tracknow.io/api/v2').rstrip('/'),
-                        views_interval=int(polling.get('youtube_seconds',900)),partner_interval=int(polling.get('tracknow_seconds',60)))
+                        views_interval=int(polling.get('youtube_seconds',900)),partner_interval=int(polling.get('tracknow_seconds',60)),
+                        config_supplied=True)
     except (tomllib.TOMLDecodeError,ValueError,TypeError,AttributeError):
-        raise ValueError('Неверный формат config.toml. Сверьте его с config.example.toml.') from None
+        raise ValueError('Неверный формат CONFIG_TOML или config.toml. Сверьте содержимое с config.example.toml.') from None
 
 settings=load_settings()

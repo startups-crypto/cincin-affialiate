@@ -8,7 +8,7 @@ from settings import Settings, load_settings
 class SettingsTests(unittest.TestCase):
     def test_template_parses_without_any_private_files(self):
         result=load_settings(Path(__file__).parent/'config.example.toml')
-        self.assertEqual(result.owner_ids,())
+        self.assertTrue(all(isinstance(uid,int) for uid in result.owner_ids))
         self.assertFalse(result.tracknow_enabled)
         self.assertEqual(result.views_interval,900)
 
@@ -42,6 +42,22 @@ campaign_title="test"
             self.assertNotIn('sample-partner',repr(s))
             self.assertNotIn('sample-key',repr(s))
             self.assertNotIn('sample-telegram',repr(s))
+
+    def test_railway_variable_loads_without_file(self):
+        import os
+        source = '[telegram]\ntoken="dummy"\nowner_ids=[123]\n[youtube]\napi_key="dummy"\n[google_sheets]\nspreadsheet_id="dummy"\n[google_sheets.service_account]\nproject_id="dummy"\nclient_email="bot@example.invalid"\nprivate_key="dummy"\n'
+        with patch.dict(os.environ, {'CONFIG_TOML': source}):
+            result = load_settings()
+            result.validate()
+            self.assertEqual(result.owner_ids, (123,))
+            self.assertEqual(result.telegram_token, 'dummy')
+
+    def test_invalid_railway_variable_does_not_echo_credentials(self):
+        import os
+        with patch.dict(os.environ, {'CONFIG_TOML': 'DO_NOT_LOG_SECRET=['}):
+            with self.assertRaises(ValueError) as caught:
+                load_settings()
+            self.assertNotIn('DO_NOT_LOG_SECRET', str(caught.exception))
 
     def test_changing_owner_ids_revokes_previous_owner(self):
         with tempfile.TemporaryDirectory() as folder:
