@@ -59,3 +59,29 @@ class MaterialTests(IsolatedAsyncioTestCase):
         (self.root/'assets/cards/card.mp4').unlink()
         with self.assertRaises(ValueError):await self.kit.send_cards(self.bot,123)
         self.bot.send_media_group.assert_not_awaited()
+
+    def add_exchange_assets(self):
+        folder=self.root/'assets/exchange'
+        folder.mkdir()
+        (folder/'banner.mp4').write_bytes(b'exchange-banner')
+        (folder/'card.mp4').write_bytes(b'exchange-card')
+
+    async def test_exchange_sends_crypto_captions(self):
+        self.add_exchange_assets()
+        await self.kit.send_exchange(self.bot,123)
+        media=self.bot.send_media_group.call_args.kwargs['media']
+        self.assertEqual(len(media),2)
+        self.assertTrue(all('CinCin Exchange' in v.caption for v in media))
+        self.assertTrue(all('СБП' not in v.caption for v in media))
+
+    async def test_exchange_does_not_reuse_cards_banner_cache(self):
+        self.add_exchange_assets()
+        await self.kit.send_cards(self.bot,123)
+        await self.kit.send_exchange(self.bot,123)
+        self.assertTrue(all(isinstance(v.media,InputFile) for v in self.bot.send_media_group.call_args.kwargs['media']))
+        self.assertEqual(len(self.store.rows('SELECT * FROM material_files')),4)
+
+    async def test_unknown_direction_sends_nothing(self):
+        with self.assertRaises(ValueError):
+            await self.kit.send(self.bot,123,'unknown')
+        self.bot.send_media_group.assert_not_awaited()

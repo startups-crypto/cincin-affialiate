@@ -317,22 +317,17 @@ async def show_link(update, context, direction=None, email=None):
         return
     selected,link=await partner_program.issue(uid,direction,email)
     context.user_data.pop('state',None)
-    await update.effective_message.reply_text('🔗 '+selected['title']+'\n'+selected['description']+'\n\nВаша партнёрская ссылка:\n'+link+'\n\n'+CARD_REWARD,reply_markup=InlineKeyboardMarkup(([[InlineKeyboardButton('🎬 Материалы для СБП',callback_data='materials:cards')]] if direction=='cards' else [])+[[InlineKeyboardButton('🔀 Другое направление',callback_data='partner:choose')]]),disable_web_page_preview=True)
-    if direction=='cards':
-        await send_materials(update,context,'cards')
+    await update.effective_message.reply_text('🔗 '+selected['title']+'\n'+selected['description']+'\n\nВаша партнёрская ссылка:\n'+link+'\n\n'+CARD_REWARD,reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton('🎬 Материалы для СБП' if direction=='cards' else '🎬 Материалы для криптовалюты',callback_data='materials:'+direction)]]+[[InlineKeyboardButton('🔀 Другое направление',callback_data='partner:choose')]]),disable_web_page_preview=True)
+    await send_materials(update,context,direction)
 
 async def send_materials(update, context, direction):
-    if direction=='cards':
-        try:
-            await material_kit.send_cards(context.bot,update.effective_user.id)
-        except Exception as error:
-            log.warning('Material delivery failed: %s',type(error).__name__)
-            await update.effective_message.reply_text('Не удалось отправить видео. Ваша партнёрская ссылка сохранена. Нажмите кнопку, чтобы повторить загрузку материалов.',reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton('🔄 Получить материалы',callback_data='materials:cards')]]))
-    elif direction=='exchange':
-        with (ROOT/'assets/material.png').open('rb') as file:
-            await update.effective_message.reply_document(file,caption='Логотип CinCin Partners. Видеоматериалы для пополнения криптовалютой будут добавлены отдельно.')
-    else:
+    if direction not in ('cards','exchange'):
         raise ValueError('Неизвестное направление материалов.')
+    try:
+        await material_kit.send(context.bot,update.effective_user.id,direction)
+    except Exception as error:
+        log.warning('Material delivery failed: %s',type(error).__name__)
+        await update.effective_message.reply_text('Не удалось отправить видео. Ваша партнёрская ссылка сохранена. Нажмите кнопку, чтобы повторить загрузку материалов.',reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton('🔄 Получить материалы',callback_data='materials:'+direction)]]))
 
 async def support(update, context):
     context.user_data['state'] = ('support',)

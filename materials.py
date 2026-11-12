@@ -1,4 +1,4 @@
-"""Cards media kit with per-bot Telegram file-id caching."""
+"""Direction-specific media kits with per-bot Telegram file-id caching."""
 import asyncio
 from contextlib import ExitStack
 import hashlib
@@ -15,18 +15,28 @@ class MaterialKit:
         self.store.run('CREATE TABLE IF NOT EXISTS material_files(cache_key TEXT PRIMARY KEY,file_id TEXT)')
 
     async def send_cards(self, bot, uid):
+        return await self.send(bot,uid,'cards')
+
+    async def send_exchange(self, bot, uid):
+        return await self.send(bot,uid,'exchange')
+
+    async def send(self, bot, uid, direction):
+        catalog={'cards':('CinCin Cards','пополнение рублями РФ через СБП'),
+                 'exchange':('CinCin Exchange','пополнение криптовалютой')}
+        if direction not in catalog:raise ValueError('Неизвестное направление материалов.')
+        brand,description=catalog[direction]
         async with self.lock:
-            assets=[self.root/'assets/cards/banner.mp4',self.root/'assets/cards/card.mp4']
+            assets=[self.root/f'assets/{direction}/banner.mp4',self.root/f'assets/{direction}/card.mp4']
             captions=[
-                '🎬 Материалы CinCin Cards — пополнение рублями РФ через СБП.\n\nИспользуйте эти материалы для своих роликов. Баннер должен присутствовать на протяжении всего видео, а ваша партнёрская ссылка — в описании.',
-                '🎬 Дополнительный материал CinCin Cards — пополнение рублями РФ через СБП.',
+                f'🎬 Материалы {brand} — {description}.\n\nИспользуйте эти материалы для своих роликов. Баннер должен присутствовать на протяжении всего видео, а ваша партнёрская ссылка — в описании.',
+                f'🎬 Дополнительный материал {brand} — {description}.',
             ]
             keys=[];cached=[]
             for path in assets:
                 if not path.is_file() or path.stat().st_size>50*1024*1024:
                     raise ValueError('Видеоматериалы временно недоступны.')
                 digest=hashlib.sha256(path.read_bytes()).hexdigest()
-                key=f'{self.bot_id}:cards:{path.name}:{digest}'
+                key=f'{self.bot_id}:{direction}:{path.name}:{digest}'
                 row=self.store.one('SELECT file_id FROM material_files WHERE cache_key=?',(key,))
                 keys.append(key);cached.append(row['file_id'] if row else None)
             with ExitStack() as stack:
