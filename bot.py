@@ -11,6 +11,7 @@ from terms import CARD_REWARD, RULES, WELCOME
 from settings import settings
 from partner_program import PartnerProgram
 from materials import MaterialKit
+from account_flow import AccountFlow
 
 settings.validate()
 
@@ -21,6 +22,7 @@ tracknow = Tracknow()
 campaign_id = settings.tracknow_campaign_id
 partner_program = PartnerProgram(store,tracknow,settings)
 material_kit = MaterialKit(store,ROOT,settings.telegram_token.split(':',1)[0])
+account_flow = AccountFlow(store)
 log = logging.getLogger('cincin')
 logging.basicConfig(level=logging.INFO, format='%(asctime)s %(name)s %(levelname)s %(message)s')
 logging.getLogger('httpx').setLevel(logging.WARNING)
@@ -36,7 +38,7 @@ def staff(uid):
     return bool(u and u['role'] in ('owner', 'manager') and not u['blocked'])
 
 def menu(uid):
-    rows = [['📹 Добавить ролик', '📊 Мои ролики'], ['📺 Мои каналы', '➕ Подключить канал'], ['💰 Баланс', '💳 CPA и оборот'], ['🔗 Партнёрская ссылка'], ['👛 Кошелёк', '📜 Выплаты'], ['🎨 Материалы', '📋 Условия пользования'], ['💬 Поддержка']]
+    rows = [['📹 Добавить ролик', '📊 Мои ролики'], ['📺 Мои аккаунты', '➕ Подключить аккаунт'], ['💰 Баланс', '💳 CPA и оборот'], ['🔗 Партнёрская ссылка'], ['👛 Кошелёк', '📜 Выплаты'], ['🎨 Материалы', '📋 Условия пользования'], ['💬 Поддержка']]
     if staff(uid):
         rows.append(['🛠 Панель менеджера'])
     return ReplyKeyboardMarkup(rows, resize_keyboard=True)
@@ -90,6 +92,10 @@ async def callback(update, context):
     if q.data.startswith('mgr:'):
         await manager_panel.handle_callback(update, context)
         return
+    if q.data.startswith('accounts:'):
+        if not u['accepted'] or u['blocked']: raise ValueError('Сначала примите условия участия.')
+        await account_flow.callback(update, context)
+        return
     if q.data == 'cancel:affiliate_email':
         if (context.user_data.get('state') or ('',))[0] == 'affiliate_email':
             context.user_data.pop('state', None)
@@ -137,7 +143,7 @@ async def cancel(update, context):
     context.user_data.pop('state', None)
     await update.message.reply_text('Действие отменено.', reply_markup=menu(update.effective_user.id))
 
-async def add_video(uid, text):
+async def add_video(uid, text, channel_id=None):
     vid = video_id(text)
     if store.one('SELECT 1 FROM videos WHERE id=?', (vid,)):
         raise ValueError('Этот ролик уже добавлен.')
@@ -148,6 +154,8 @@ async def add_video(uid, text):
         raise ValueError('Ролик должен быть общедоступным.')
     if not store.one('SELECT 1 FROM channels WHERE id=? AND user_id=?', (v['snippet']['channelId'], uid)):
         raise ValueError('Сначала подтвердите канал, на котором опубликован ролик.')
+    if channel_id and v['snippet']['channelId'] != channel_id:
+        raise ValueError('Ролик опубликован в другом аккаунте. Выберите нужный аккаунт и отправьте ссылку повторно.')
     published = datetime.fromisoformat(v['snippet']['publishedAt'].replace('Z', '+00:00'))
     u = store.one('SELECT * FROM users WHERE id=?', (uid,))
     links = store.partner_links(uid)
@@ -191,14 +199,14 @@ async def text(update, context):
     if not u['accepted']:
         await start(update, context); return
     state = context.user_data.get('state')
-    buttons = {'📹 Добавить ролик','📊 Мои ролики','📺 Мои каналы','➕ Подключить канал','💰 Баланс','💳 CPA','💳 CPA и оборот','🔗 Партнёрская ссылка','👛 Кошелёк','📜 Выплаты','🎨 Материалы','📋 Правила','📋 Условия пользования','✉️ Менеджер','💬 Поддержка','🛠 Панель менеджера'}
+    buttons = {'📹 Добавить ролик','📊 Мои ролики','📺 Мои каналы','➕ Подключить канал','📺 Мои аккаунты','➕ Подключить аккаунт','💰 Баланс','💳 CPA','💳 CPA и оборот','🔗 Партнёрская ссылка','👛 Кошелёк','📜 Выплаты','🎨 Материалы','📋 Правила','📋 Условия пользования','✉️ Менеджер','💬 Поддержка','🛠 Панель менеджера'}
     if message in buttons:
         context.user_data.pop('state', None)
         state = None
     if state:
         kind = state[0]
         if kind == 'video':
-            result = await add_video(uid, message)
+            result = await add_video(uid, message, state[1] if len(state)>1 else None)
             await update.message.reply_text(result)
         elif kind == 'channel':
             c = await asyncio.to_thread(youtube.channel, message)
@@ -230,12 +238,10 @@ async def text(update, context):
         context.user_data.pop('state', None)
         return
     if message == '📹 Добавить ролик':
-        context.user_data['state'] = ('video',)
-        await update.message.reply_text('Отправьте ссылку на новый Shorts. Срок подачи — 24 часа с публикации. /cancel — отмена.')
-    elif message == '➕ Подключить канал':
-        context.user_data['state'] = ('channel',)
-        await update.message.reply_text(f'<b>📺 Подключение канала</b>\n\n1. Откройте описание своего YouTube-канала для редактирования.\n\n2. Добавьте в описание этот код отдельной строкой:\n\n<code>{u["code"]}</code>\n\n3. Сохраните изменения. Оставьте код в описании на всё время работы с нами.\n\n4. После добавления кода отправьте ссылку на свой канал в этот чат.\n\nПодойдёт ссылка вида:\nyoutube.com/@имя\nили youtube.com/channel/UC…\n\nБот проверит код и подтвердит подключение канала.', parse_mode='HTML')
-    elif message == '📺 Мои каналы':
+        await account_flow.choose_platform(update.message, uid)
+    elif message in ('➕ Подключить аккаунт', '➕ Подключить канал'):
+        await account_flow.connect_menu(update.message)
+    elif message in ('📺 Мои аккаунты', '📺 Мои каналы'):
         rows = store.rows('SELECT * FROM channels WHERE user_id=?', (uid,))
         await update.message.reply_text('\n'.join(f'{c["title"]}\nhttps://youtube.com/channel/{c["id"]}' for c in rows) or 'Каналов пока нет.')
     elif message == '📊 Мои ролики':
