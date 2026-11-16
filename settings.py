@@ -25,7 +25,7 @@ class Settings:
     partner_interval: int = 60
     config_supplied: bool = field(default=False, repr=False)
     storage_directory: str = ''
-    support_username: str = 'cincinb2b'
+    support_username: str = 'cincinpartners_support'
 
     @property
     def support_url(self):
@@ -87,7 +87,7 @@ def load_settings(path=CONFIG_PATH):
                         tracknow_base_url=partner.get('base_url','https://apiv2.tracknow.io/api/v2').rstrip('/'),
                         views_interval=int(polling.get('youtube_seconds',900)),partner_interval=int(polling.get('tracknow_seconds',60)),
                         config_supplied=True,storage_directory=data.get('storage',{}).get('directory',''),
-                        support_username=data.get('support',{}).get('username','cincinb2b').lstrip('@'))
+                        support_username=('cincinpartners_support' if data.get('support',{}).get('username','').lstrip('@').lower() in ('','cincinb2b') else data['support']['username'].lstrip('@')))
     except (tomllib.TOMLDecodeError,ValueError,TypeError,AttributeError):
         raise ValueError('Неверный формат CONFIG_TOML или config.toml. Сверьте содержимое с config.example.toml.') from None
 
