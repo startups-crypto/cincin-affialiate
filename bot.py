@@ -8,6 +8,7 @@ from telegram.ext import Application, CommandHandler, MessageHandler, CallbackQu
 from core import Store, ROOT, now, iso, video_id, MSK, contains_partner_link
 from services import YouTube, Sheets, RemoteError, Tracknow
 from terms import CARD_REWARD, RULES, WELCOME
+from terms_flow import TermsFlow
 from settings import settings
 from partner_program import PartnerProgram
 from materials import MaterialKit
@@ -23,6 +24,7 @@ campaign_id = settings.tracknow_campaign_id
 partner_program = PartnerProgram(store,tracknow,settings)
 material_kit = MaterialKit(store,ROOT,settings.telegram_token.split(':',1)[0])
 account_flow = AccountFlow(store)
+terms_flow = TermsFlow(store)
 log = logging.getLogger('cincin')
 logging.basicConfig(level=logging.INFO, format='%(asctime)s %(name)s %(levelname)s %(message)s')
 logging.getLogger('httpx').setLevel(logging.WARNING)
@@ -49,17 +51,15 @@ async def start(update, context):
         await manager_panel.home(update, context)
         return
     if not u['accepted']:
-        await update.message.reply_text(WELCOME + '\n\nПеред началом ознакомьтесь с условиями участия.\n\n' + RULES, reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton('✅ Принимаю условия', callback_data='accept')]]))
+        await update.message.reply_text(WELCOME, parse_mode='HTML')
+        await terms_flow.begin(update.effective_message, context, u['id'])
     else:
-        await update.message.reply_text(WELCOME + '\n\nВыберите действие в меню.', reply_markup=menu(u['id']))
+        await update.message.reply_text(WELCOME + '\n\nВыберите действие в меню.', parse_mode='HTML', reply_markup=menu(u['id']))
 
 async def show_rules(update, context):
     context.user_data.pop('state',None)
     u=store.user(update.effective_user.id,update.effective_user.full_name,update.effective_user.username or '')
-    if u['accepted']:
-        await update.effective_message.reply_text(RULES)
-    else:
-        await update.effective_message.reply_text(RULES,reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton('✅ Принимаю условия',callback_data='accept')]]))
+    await terms_flow.begin(update.effective_message, context, u['id'])
 
 async def identify(update, context):
     await update.message.reply_text(f'Ваш Telegram ID: {update.effective_user.id}')
@@ -92,6 +92,9 @@ async def callback(update, context):
     if q.data.startswith('mgr:'):
         await manager_panel.handle_callback(update, context)
         return
+    if q.data.startswith('terms:'):
+        await terms_flow.next(update, context)
+        return
     if q.data.startswith('accounts:'):
         if not u['accepted'] or u['blocked']: raise ValueError('Сначала примите условия участия.')
         await account_flow.callback(update, context)
@@ -108,6 +111,7 @@ async def callback(update, context):
         if not u['accepted'] or u['blocked']: raise ValueError('Сначала примите условия участия.')
         await show_link(update,context,None if q.data=='partner:choose' else q.data.split(':',1)[1])
     elif q.data == 'accept':
+        terms_flow.require_complete(context, uid)
         first=store.accept_terms(uid)
         if first:
             await q.edit_message_reply_markup(reply_markup=None)
