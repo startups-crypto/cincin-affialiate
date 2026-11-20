@@ -34,3 +34,11 @@ class TermsTests(unittest.IsolatedAsyncioTestCase):
         self.flow.require_complete(SimpleNamespace(user_data={}),1)
     def test_sheet_text_has_no_html(self):
         self.assertNotIn('<b>',RULES)
+
+    async def test_repeat_reader_gets_full_text_without_buttons(self):
+        self.store.accept_terms(1)
+        self.context.user_data['terms_page']=2
+        await self.flow.begin(self.message,self.context,1)
+        self.message.reply_text.assert_awaited_once_with('\n\n'.join(RULE_PAGES),parse_mode='HTML')
+        self.assertNotIn('terms_page',self.context.user_data)
+        self.assertLess(len('\n\n'.join(RULE_PAGES)),4096)

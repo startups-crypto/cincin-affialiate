@@ -6,6 +6,10 @@ class TermsFlow:
     def __init__(self,store): self.store=store
 
     async def begin(self,message,context,uid):
+        if self.store.user(uid)['accepted']:
+            context.user_data.pop('terms_page',None)
+            await message.reply_text('\n\n'.join(RULE_PAGES),parse_mode='HTML')
+            return
         context.user_data['terms_page']=-1
         await self.send(message,context,uid,0)
 
