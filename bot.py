@@ -9,6 +9,7 @@ from core import Store, ROOT, now, iso, video_id, MSK, contains_partner_link
 from services import YouTube, Sheets, RemoteError, Tracknow
 from terms import CARD_REWARD, RULES, WELCOME
 from terms_flow import TermsFlow
+from income_format import format_source, format_partner_report
 from settings import settings
 from partner_program import PartnerProgram
 from materials import MaterialKit
@@ -120,7 +121,7 @@ async def callback(update, context):
         source = q.data.split(':', 1)[1]
         if source not in ('views','cpa','turnover'): return
         await sync_partner(context)
-        await q.message.reply_text(source_text(uid, source))
+        await q.message.reply_text(source_text(uid, source), parse_mode='HTML')
     elif staff(uid) and q.data.startswith('approve:'):
         vid = q.data.split(':', 1)[1]
         v = store.one('SELECT * FROM videos WHERE id=?', (vid,))
@@ -256,14 +257,14 @@ async def text(update, context):
     elif message == '💰 Баланс':
         await sync_partner(context)
         income = store.income(uid)
-        lines = [f'<b>💰 Сумма баланса: {money(store.balance(uid))}</b>', '', f"Просмотры: {money(income['views']['balance'])}", f"Оформление карт: {money(income['cpa']['balance'])}", f"Оборот по картам (0,1%): {money(income['turnover']['balance'])}", '', 'Просмотры требуют проверки менеджером. Выплаты от $20 суммарно, 5–10 числа за предыдущий месяц.', '', partner_sync_text()]
+        lines = [f'<b>💰 Сумма баланса: {money(store.balance(uid))}</b>', '', f"📹 Просмотры: {money(income['views']['balance'])}", f"💳 Оформление карт: {money(income['cpa']['balance'])}", f"🔄 Оборот по картам (0,1%): {money(income['turnover']['balance'])}", '', 'Просмотры требуют проверки менеджером. Выплаты от $20 суммарно, 5–10 числа за предыдущий месяц.', '', partner_sync_text()]
         profile = store.one('SELECT tracking_link FROM users WHERE id=?', (uid,))
         if not (profile['tracking_link'] or '').strip():
             lines += ['', '<code>Для учёта карт подключите партнёрский аккаунт кнопкой «Партнёрская ссылка».</code>']
         await update.message.reply_text('\n'.join(lines), parse_mode='HTML', reply_markup=income_buttons())
     elif message in ('💳 CPA', '💳 CPA и оборот'):
         await sync_partner(context)
-        await update.message.reply_text(CARD_REWARD + '\n\n' + source_text(uid, 'cpa') + '\n\n' + source_text(uid, 'turnover'), reply_markup=income_buttons())
+        await update.message.reply_text(format_partner_report(store.income(uid), partner_sync_text()), parse_mode='HTML', reply_markup=income_buttons())
     elif message == '🔗 Партнёрская ссылка':
         await show_link(update, context)
     elif message == '👛 Кошелёк':
@@ -296,25 +297,11 @@ def partner_sync_text():
     state = store.one("SELECT * FROM sync_state WHERE name='tracknow'")
     if not state: return 'Информация ещё не обновлена.'
     if state['error']: return 'Не удалось обновить информацию. Показаны последние сохранённые данные.'
-    date = datetime.fromisoformat(state['at']).astimezone(MSK).strftime('%d.%m.%Y %H:%M')
-    return f'Информация обновлена: {date} GMT+3.'
+    date = datetime.fromisoformat(state['at']).astimezone(MSK).strftime('%d.%m.%Y, %H:%M')
+    return f'Информация обновлена: {date} (GMT+3)'
 
 def source_text(uid, source):
-    labels = {'views':'📹 Просмотры', 'cpa':'💳 Оформление карт — $10 за карту', 'turnover':'🔄 Оборот по картам — 0,1%'}
-    data = store.income(uid)[source]
-    lines = [labels[source], f"Начислено за всё время (с учётом отмен): {money(data['earned'])}", f"Выплачено: {money(data['paid'])}", f"Остаток: {money(data['balance'])}"]
-    if source == 'views': lines.append('Предварительно до проверки контента менеджером.')
-    else:
-        lines += [f"Ожидает подтверждения: ${data['pending_micro']/1000000:.6f}", f"Тестовые операции: ${data['test_micro']/1000000:.6f} (не входят в баланс)"]
-        if source == 'turnover':
-            lines.append('Все доступные операции карт, открытых по вашей партнёрской ссылке. Доли цента накапливаются; баланс округляется после суммирования.')
-        records = store.rows('SELECT status,order_id,commission_micro FROM partner_events WHERE user_id=? AND source=? ORDER BY updated DESC LIMIT 5', (uid, source))
-        statuses = {0:'подтверждено',1:'удержание',2:'ожидает',3:'отклонено',4:'пересмотр',5:'тест',6:'обработка',7:'подтверждено в Tracknow'}
-        if records:
-            lines.append('Последние события:')
-            lines += [f"{r['order_id']}: ${r['commission_micro']/1000000:.6f} · {statuses[r['status']]}" for r in records]
-        lines.append(partner_sync_text())
-    return '\n'.join(lines)
+    return format_source(store.income(uid)[source], source)
 
 async def show_link(update, context, direction=None, email=None):
     if not settings.tracknow_enabled:

@@ -3,7 +3,7 @@ import asyncio
 from contextlib import ExitStack
 import hashlib
 from pathlib import Path
-from telegram import InputMediaVideo
+from telegram import InputMediaDocument
 from telegram.error import BadRequest
 
 class MaterialKit:
@@ -47,11 +47,11 @@ class MaterialKit:
                 if not path.is_file() or path.stat().st_size>50*1024*1024:
                     raise ValueError('Видеоматериалы временно недоступны.')
                 digest=hashlib.sha256(path.read_bytes()).hexdigest()
-                key=f'{self.bot_id}:{direction}:{path.name}:{digest}'
+                key=f'{self.bot_id}:document:{direction}:{path.name}:{digest}'
                 row=self.store.one('SELECT file_id FROM material_files WHERE cache_key=?',(key,))
                 keys.append(key);cached.append(row['file_id'] if row else None)
             with ExitStack() as stack:
-                media=[InputMediaVideo(file_id or stack.enter_context(path.open('rb')),caption=caption,supports_streaming=True)
+                media=[InputMediaDocument(file_id or stack.enter_context(path.open('rb')),caption=caption,filename=f'CinCin_{path.parent.name}_{path.name}',disable_content_type_detection=True)
                        for path,file_id,caption in zip(assets,cached,captions)]
                 try:
                     messages=await bot.send_media_group(chat_id=uid,media=media,write_timeout=120,read_timeout=120)
@@ -60,6 +60,6 @@ class MaterialKit:
                         if file_id:self.store.run('DELETE FROM material_files WHERE cache_key=?',(key,))
                     raise
             for key,message in zip(keys,messages):
-                if message.video:
-                    self.store.run('INSERT INTO material_files VALUES(?,?) ON CONFLICT(cache_key) DO UPDATE SET file_id=excluded.file_id',(key,message.video.file_id))
+                if message.document:
+                    self.store.run('INSERT INTO material_files VALUES(?,?) ON CONFLICT(cache_key) DO UPDATE SET file_id=excluded.file_id',(key,message.document.file_id))
             return messages

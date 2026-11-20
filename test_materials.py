@@ -18,7 +18,7 @@ class MaterialTests(IsolatedAsyncioTestCase):
         (directory/'card.mp4').write_bytes(b'video-two')
         self.store=Store(':memory:')
         self.kit=MaterialKit(self.store,self.root,'test-bot')
-        self.messages=[NS(video=NS(file_id='cached-one')),NS(video=NS(file_id='cached-two'))]
+        self.messages=[NS(document=NS(file_id='cached-one')),NS(document=NS(file_id='cached-two'))]
         self.bot=NS(send_media_group=AsyncMock(return_value=self.messages))
 
     async def test_first_upload_has_both_cards_videos_and_caches_ids(self):
@@ -28,6 +28,8 @@ class MaterialTests(IsolatedAsyncioTestCase):
         self.assertEqual(len(args['media']),2)
         self.assertTrue(all(isinstance(v.media,InputFile) for v in args['media']))
         self.assertIn('СБП',args['media'][0].caption)
+        self.assertTrue(all(v.type == 'document' for v in args['media']))
+        self.assertTrue(all(v.disable_content_type_detection for v in args['media']))
         self.assertEqual(len(self.store.rows('SELECT * FROM material_files')),2)
 
     async def test_repeat_uses_telegram_ids_instead_of_uploading(self):
@@ -85,3 +87,20 @@ class MaterialTests(IsolatedAsyncioTestCase):
         with self.assertRaises(ValueError):
             await self.kit.send(self.bot,123,'unknown')
         self.bot.send_media_group.assert_not_awaited()
+
+    async def test_all_materials_are_three_named_documents(self):
+        self.add_exchange_assets()
+        self.bot.send_media_group.return_value=self.messages+[NS(document=NS(file_id='third'))]
+        await self.kit.send_all(self.bot,123)
+        media=self.bot.send_media_group.call_args.kwargs['media']
+        self.assertEqual(len(media),3)
+        self.assertTrue(all(v.type=='document' for v in media))
+        self.assertEqual(len({v.media.filename for v in media}),3)
+
+    async def test_old_video_cache_is_not_used_for_documents(self):
+        import hashlib
+        for path in (self.root/'assets/cards').iterdir():
+            digest=hashlib.sha256(path.read_bytes()).hexdigest()
+            self.store.run('INSERT INTO material_files VALUES(?,?)',(f'test-bot:cards:{path.name}:{digest}','old-video-id'))
+        await self.kit.send_cards(self.bot,123)
+        self.assertTrue(all(isinstance(v.media,InputFile) for v in self.bot.send_media_group.call_args.kwargs['media']))
