@@ -55,7 +55,7 @@ async def start(update, context):
         await update.message.reply_text(WELCOME, parse_mode='HTML')
         await terms_flow.begin(update.effective_message, context, u['id'])
     else:
-        await update.message.reply_text(WELCOME + '\n\nВыберите действие в меню.', parse_mode='HTML', reply_markup=menu(u['id']))
+        await update.message.reply_text('С возвращением в CinCin Partners 👋\n\nВыберите действие в меню.', reply_markup=menu(u['id']))
 
 async def show_rules(update, context):
     context.user_data.pop('state',None)
